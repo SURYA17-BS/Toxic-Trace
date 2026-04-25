@@ -1,0 +1,267 @@
+═══════════════════════════════════════════════════════
+   IRONSENSE PRO — PORTABLE IRON DETECTION SYSTEM
+   Pseudo Code Documentation
+═══════════════════════════════════════════════════════
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SYSTEM COMPONENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  HARDWARE   : ESP32s Microcontroller
+  SENSOR     : AS7343 Spectral Sensor
+  BACKEND    : Firebase Realtime Database
+  FRONTEND   : HTML/CSS/JS Progressive Web App
+  PROTOCOL   : Firebase Commands → ESP32 → Sensor → Firebase
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. SYSTEM INITIALIZATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  BEGIN INIT
+    CONNECT to Firebase Realtime Database
+    LISTEN to device node → iron_monitor/device01
+    LISTEN to readings node → iron_monitor/device01/readings (last 20)
+    
+    SET currentThreshold ← 0.30 PPM (WHO default)
+    SET isReadingActive  ← FALSE
+    SET csvData          ← empty array
+    SET scanTimer        ← null
+
+    INITIALIZE Chart.js waveform (line chart, empty)
+    
+    LOG "Core Systems Ready"
+  END INIT
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. HARDWARE CONNECTION MONITOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON Firebase device node change:
+    READ lastSeen timestamp from Firebase
+
+    IF (currentTime - lastSeen) < 15000ms THEN
+      SET status dot → GREEN (ONLINE)
+      DISPLAY "HARDWARE ONLINE"
+    ELSE
+      SET status dot → RED (OFFLINE)
+      DISPLAY "SYSTEM OFFLINE"
+    END IF
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. BASELINE SCAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user presses [Baseline Scan]:
+    SET isReadingActive ← FALSE
+    HIGHLIGHT baselineBtn (accent color)
+    START scanner ring animation
+    SEND command "baseline" → Firebase
+
+    LOG "Scanning Baseline..."
+
+    START timer (5000ms)
+      ON timer complete:
+        STOP scanner ring animation
+        RESET button highlight
+        LOG "Scan Complete"
+        SHOW baseline popup:
+          DISPLAY ✅ "BASELINE SCANNED"
+          DISPLAY "Reference calibration complete"
+          DISPLAY timestamp of scan
+          WAIT for user to press OK or tap overlay
+            → HIDE popup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. SAMPLE SCAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user presses [Sample Scan]:
+    SET isReadingActive ← TRUE
+    HIGHLIGHT sampleBtn (accent color)
+    START scanner ring animation
+    SEND command "start" → Firebase
+
+    LOG "Reading Sample..."
+
+    START timer (5000ms)
+      ON timer complete:
+        STOP scanner ring animation
+        RESET button highlight
+        LOG "Scan Complete"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. LIVE READINGS LISTENER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON Firebase readings node change:
+
+    IF isReadingActive = FALSE THEN
+      SET PPM display ← 0.00
+      RETURN (ignore data)
+    END IF
+
+    READ latest PPM value from Firebase
+    READ all values (last 20)
+
+    CALL updateGauge(latestPPM)
+    UPDATE waveform chart with all values
+
+    FOR each reading:
+      FORMAT timestamp → "YYYY-MM-DD HH:MM:SS"
+      IF reading not already in csvData THEN
+        APPEND { timestamp, ppm } to csvData
+      END IF
+    END FOR
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. UPDATE GAUGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  FUNCTION updateGauge(ppm):
+
+    DISPLAY ppm on screen (2 decimal places)
+    UPDATE circular progress ring:
+      strokeDashoffset ← 848 - (848 × min(ppm / 2.0, 1))
+
+    CALCULATE percent ← (ppm / currentThreshold) × 100
+
+    IF ppm < currentThreshold THEN
+      SET color  ← GREEN (#00ff88)
+      SET status ← "SAFE"
+      SET tag    ← "STABLE"
+
+    ELSE IF ppm < currentThreshold × 1.5 THEN
+      SET color  ← ORANGE (#ffa500)
+      SET status ← "CAUTION"
+      SET tag    ← "ELEVATED"
+
+    ELSE
+      SET color  ← RED (#ff3b3b)
+      SET status ← "DANGER"
+      SET tag    ← "WARNING"
+    END IF
+
+    UPDATE --accent CSS variable ← color
+    UPDATE safety meter fill width ← percent%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. ABORT PROCESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user presses [Abort Process]:
+    SET isReadingActive ← FALSE
+    CLEAR scanTimer immediately
+    STOP scanner ring animation
+    RESET all button highlights
+    SEND command "stop" → Firebase
+    LOG "Process Aborted"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. SYSTEM RESET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user presses [System Reset]:
+    SHOW confirm dialog → "WARNING: Wipe all data?"
+
+    IF user confirms THEN
+      SET isReadingActive ← FALSE
+      STOP scanner ring + clear timer
+      SEND command "reset" → Firebase
+      DELETE iron_monitor/device01/readings from Firebase
+      DELETE iron_monitor/device01/baseline from Firebase
+      RESET PPM display ← 0.00
+      CLEAR csvData array
+      CLEAR waveform chart
+      LOG "Storage Wiped & Node Reset"
+    ELSE
+      DO NOTHING
+    END IF
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. CSV EXPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user presses [Download CSV]:
+
+    IF csvData is empty THEN
+      SHOW alert "No readings recorded yet"
+      RETURN
+    END IF
+
+    BUILD CSV content:
+      LINE 1 → header: "Timestamp, Iron Concentration (mg/L), Status"
+      
+      FOR each record in csvData:
+        DETERMINE status:
+          IF ppm < threshold         → "SAFE"
+          IF ppm < threshold × 1.5   → "CAUTION"
+          IF ppm >= threshold × 1.5  → "DANGER"
+        APPEND row: timestamp, ppm (4 decimal), status
+      END FOR
+
+      APPEND summary:
+        Total readings count
+        Average PPM
+        Max PPM
+        Min PPM
+        Active threshold
+
+    GENERATE filename:
+      "IronSense_YYYYMMDD_HHMM.csv"
+
+    CREATE Blob from CSV string
+    TRIGGER browser download
+    LOG "CSV Exported: N Records"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. THRESHOLD / PROTOCOL SELECTOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON user changes protocol dropdown:
+
+    PROTOCOL OPTIONS:
+      WHO (Global)   → 0.30 mg/L
+      BIS IS:10500   → 0.30 mg/L
+      US-EPA         → 0.30 mg/L
+      EU Directive   → 0.20 mg/L
+      India (Perm.)  → 1.00 mg/L
+
+    SET currentThreshold ← selected value
+    UPDATE threshold display label
+    RECALCULATE gauge with current PPM value
+    LOG "X Limit: Y PPM"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. FIREBASE DATA STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  iron_monitor/
+  └── device01/
+      ├── command       ← "baseline" | "start" | "stop" | "reset"
+      ├── lastSeen      ← Unix timestamp (ms) from ESP32 heartbeat
+      ├── baseline/     ← stored baseline spectral values
+      └── readings/
+          └── <id>/
+              ├── ppm        ← float (iron concentration)
+              └── timestamp  ← Unix timestamp (ms)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. PWA / SERVICE WORKER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ON service worker install:
+    OPEN cache "ironsense-v1"
+    CACHE files: index.html, manifest.json,
+                 sw.js, symbiot.jpeg,
+                 icon-192.png, icon-512.png
+
+  ON fetch request:
+    IF request exists in cache THEN
+      RETURN cached version
+    ELSE
+      FETCH from network
+    END IF
+
+═══════════════════════════════════════════════════════
+   END OF PSEUDO CODE
+═══════════════════════════════════════════════════════
