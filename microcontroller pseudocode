@@ -1,50 +1,77 @@
-START
-
-INITIALIZE system
-    Initialize ESP32
-    Initialize spectral sensor (I2C)
-    Initialize OLED display
-    Initialize button input
-    Initialize WiFi and Firebase
-
-SET calibration constants (m, c)
-
-LOOP forever
-
-    WAIT for button press
-
-    // Step 1: Capture Reference (I₀)
-    DISPLAY "Insert DI Water"
-    DELAY for stabilization
-    READ sensor multiple times
-    CALCULATE average intensity → I0
-
-    // Step 2: Capture Sample (I)
-    DISPLAY "Insert Sample"
-    DELAY for stabilization
-    READ sensor multiple times
-    CALCULATE average intensity → I
-
-    // Step 3: Calculate Absorbance
-    IF I <= 0 OR I0 <= 0
-        DISPLAY "Error: Invalid reading"
-        CONTINUE
-    ENDIF
-
-    A = log10(I0 / I)
-
-    // Step 4: Convert to Concentration
-    concentration = (A - c) / m
-
-    // Step 5: Display Result
-    DISPLAY concentration on OLED
-
-    // Step 6: Send to Cloud
-    SEND concentration, A, I0, I to Firebase
-
-    // Step 7: Wait before next cycle
-    DISPLAY "Press button to measure again"
-
-END LOOP
+START IRON MONITOR SYSTEM
+│
+├── CONFIGURE
+│   ├── WiFi: SSID + password
+│   ├── Firebase URL
+│   ├── NTP server + IST offset (+5:30)
+│   ├── Calibration: slope=0.0777, intercept=0.0302
+│   └── State: baseAvg=0, singleReadingRequested=false
+│
+├── FIREBASE HELPERS
+│   ├── PUT(path, value)   → HTTP PUT  to baseURL/path.json
+│   ├── POST(path, json)   → HTTP POST to baseURL/path.json
+│   └── GET(path)          → HTTP GET  from baseURL/path.json → return string
+│
+├── UTILITIES
+│   ├── getEpochMillis()   → localTime → unix seconds × 1000
+│   │
+│   └── readGreenAverage()
+│       ├── Loop 25 times (80ms delay each)
+│       │   ├── Read spectra from AS7343
+│       │   └── IF index > 3 → accumulate green value   // skip 4 warm-up reads
+│       └── RETURN sum / count
+│
+├── SETUP  (runs once)
+│   ├── Init Serial + I2C
+│   ├── Connect WiFi (block until connected)
+│   ├── Sync time via NTP
+│   ├── Load baseline from flash
+│   │   └── IF found → restore to Firebase "baseline"
+│   ├── Init AS7343 sensor
+│   │   ├── begin()
+│   │   ├── powerOn()
+│   │   ├── setAutoSmux(18 channels)
+│   │   └── enableSpectralMeasurement()
+│   │       └── any step fails → HALT
+│   └── SET Firebase command ← "idle"
+│
+└── LOOP  (runs forever)
+    │
+    ├── every 15s → PUT getEpochMillis() to Firebase "lastSeen"
+    │
+    ├── every 2s  → GET Firebase "command"
+    │   │
+    │   ├── "baseline"
+    │   │   ├── baseAvg ← readGreenAverage()
+    │   │   ├── Save baseAvg to flash
+    │   │   ├── PUT baseAvg to Firebase "baseline"
+    │   │   └── SET command ← "idle"
+    │   │
+    │   ├── "start"
+    │   │   ├── IF baseAvg > 0 → singleReadingRequested ← true
+    │   │   ├── ELSE → log "Baseline not set"
+    │   │   └── SET command ← "idle"
+    │   │
+    │   ├── "stop"
+    │   │   ├── singleReadingRequested ← false
+    │   │   └── SET command ← "idle"
+    │   │
+    │   └── "reset"
+    │       ├── singleReadingRequested ← false
+    │       ├── Clear flash baseline
+    │       ├── baseAvg ← 0
+    │       ├── PUT null → Firebase "baseline" + "readings"
+    │       └── SET command ← "idle"
+    │
+    └── IF singleReadingRequested == true
+        ├── sampleAvg ← readGreenAverage()
+        ├── T ← sampleAvg / baseAvg          // Transmittance
+        ├── IF T <= 0 → T ← 0.0001           // guard against log(0)
+        ├── A ← -log10(T)                    // Beer-Lambert Absorbance
+        ├── ppm ← (A - 0.0302) / 0.0777     // linear calibration
+        ├── IF ppm < 0 → ppm ← 0
+        ├── POST { ppm, absorbance, timestamp } → Firebase "readings"
+        ├── singleReadingRequested ← false
+        └── wait 1s
 
 END
