@@ -1,267 +1,146 @@
-═══════════════════════════════════════════════════════
-   IRONSENSE PRO — PORTABLE IRON DETECTION SYSTEM
-   Pseudo Code Documentation
-═══════════════════════════════════════════════════════
+START IRONSENSE PRO DASHBOARD
+│
+├── CONFIGURE
+│   ├── Firebase: apiKey, databaseURL
+│   ├── Refs: device01 (full node), readings (last 20)
+│   └── State: chart=null, currentThreshold=0.30,
+│              lastKnownStatus=null, isReadingActive=false,
+│              scanTimer=null, csvData=[]
+│
+├── THEMES  (CSS variable swaps on <body> class)
+│   ├── dark (Toxic Neon)   ├── neon-lab (Deep Space)
+│   ├── light (Clinical)    ├── cyber-red
+│   ├── forest-tech         └── mono-gold
+│
+├── UI COMPONENTS
+│   ├── Left Panel
+│   │   ├── Logo image
+│   │   ├── Buttons: Baseline Scan, Sample Scan,
+│   │   │           Abort, System Reset, Download CSV
+│   │   └── Hardware info tags (ESP32 + AS7343)
+│   │
+│   ├── Centre Panel
+│   │   ├── PPM display (large numeric)
+│   │   ├── Scanner ring (SVG circle progress + spin animation)
+│   │   ├── Online/Offline status dot
+│   │   └── Theme selector dropdown
+│   │
+│   └── Right Panel  (hidden on mobile)
+│       ├── Stability waveform (Chart.js line chart)
+│       ├── Safety protocol card
+│       │   ├── Limit selector (WHO / BIS / EPA / EU / India)
+│       │   ├── Threshold value display
+│       │   ├── Safety fill bar
+│       │   └── Status tag (STABLE / ELEVATED / WARNING)
+│       └── Live telemetry log terminal
+│
+├── HELPERS
+│   │
+│   ├── addLog(msg)
+│   │   ├── Create log-entry div with [HH:MM:SS] + msg
+│   │   ├── Prepend to terminal
+│   │   └── IF entries > 8 → remove oldest
+│   │
+│   ├── updateGauge(ppm)
+│   │   ├── Set PPM display text
+│   │   ├── Update SVG circle offset ← ppm / 2.0 (capped at 1)
+│   │   ├── Compute pct ← (ppm / threshold) × 100
+│   │   ├── Update safety fill bar width
+│   │   └── Set accent color:
+│   │       ├── ppm < threshold      → green  | SAFE    | STABLE
+│   │       ├── ppm < threshold×1.5  → orange | CAUTION | ELEVATED
+│   │       └── ppm ≥ threshold×1.5  → red    | DANGER  | WARNING
+│   │
+│   ├── setBtnActive(id)  / clearBtnActive()
+│   │   └── Toggle .btn-active class + inline styles on
+│   │       baselineBtn and sampleBtn
+│   │
+│   ├── startRing(ms, showPopup?)
+│   │   ├── Add .spinning class to scanner ring
+│   │   └── After ms:
+│   │       ├── Remove .spinning
+│   │       ├── clearBtnActive()
+│   │       ├── addLog("Scan Complete")
+│   │       └── IF showPopup → showBaselinePopup()
+│   │
+│   ├── stopRing()
+│   │   ├── Clear pending timer
+│   │   ├── Remove .spinning
+│   │   └── clearBtnActive()
+│   │
+│   ├── showBaselinePopup() / hideBaselinePopup()
+│   │   ├── Stamp current datetime into popup
+│   │   └── Toggle .show on #baseline-popup + #popup-overlay
+│   │
+│   ├── formatTs(raw)
+│   │   ├── IF Unix ms/s number → convert to Date
+│   │   └── Return "YYYY-MM-DD HH:MM:SS" string
+│   │
+│   └── sendCmd(cmd)
+│       └── Firebase SET device01/command ← cmd
+│
+├── BUTTON EVENTS
+│   │
+│   ├── Baseline Scan clicked
+│   │   ├── isReadingActive ← false
+│   │   ├── sendCmd("baseline")
+│   │   ├── setBtnActive("baselineBtn")
+│   │   └── startRing(5000, showPopup=true)
+│   │
+│   ├── Sample Scan clicked
+│   │   ├── isReadingActive ← true
+│   │   ├── sendCmd("start")
+│   │   ├── setBtnActive("sampleBtn")
+│   │   └── startRing(5000)
+│   │
+│   ├── Abort clicked
+│   │   ├── isReadingActive ← false
+│   │   ├── sendCmd("stop")
+│   │   └── stopRing()
+│   │
+│   ├── System Reset clicked
+│   │   ├── Confirm dialog → cancel → exit
+│   │   ├── isReadingActive ← false, stopRing()
+│   │   ├── sendCmd("reset")
+│   │   ├── Firebase REMOVE readings + baseline nodes
+│   │   ├── updateGauge(0)
+│   │   ├── csvData ← []
+│   │   └── Clear chart data + update
+│   │
+│   ├── Download CSV clicked
+│   │   ├── IF csvData empty → alert + exit
+│   │   ├── Build CSV rows: timestamp, ppm, status
+│   │   ├── Append summary: count, avg, max, min, threshold
+│   │   ├── Create Blob → Object URL
+│   │   └── Trigger download as IronSense_YYYYMMDD_HHMM.csv
+│   │
+│   ├── Theme selector changed
+│   │   └── Set body.className ← selected value
+│   │
+│   └── Limit selector changed
+│       ├── currentThreshold ← parseFloat(selected)
+│       ├── Update threshold display text
+│       ├── Update limit label
+│       └── Re-run updateGauge(current ppm)
+│
+├── FIREBASE LISTENERS  (set up on window load)
+│   │
+│   ├── onValue(readings — last 20)
+│   │   ├── IF no data OR !isReadingActive → updateGauge(0), return
+│   │   ├── updateGauge(latest ppm)
+│   │   ├── Push all ppm values to chart → chart.update()
+│   │   └── FOR each reading:
+│   │       ├── formatTs(timestamp)
+│   │       └── IF not duplicate → push to csvData
+│   │
+│   └── onValue(device01)
+│       ├── online ← (now - lastSeen) < 15000ms
+│       ├── Update status dot + text
+│       └── IF status changed → addLog("Link Established" / "Signal Lost")
+│
+└── ON WINDOW LOAD
+    ├── Init Chart.js line chart (20 labels, no axes)
+    ├── Attach Firebase listeners
+    └── addLog("Core Systems Ready")
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SYSTEM COMPONENTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  HARDWARE   : ESP32s Microcontroller
-  SENSOR     : AS7343 Spectral Sensor
-  BACKEND    : Firebase Realtime Database
-  FRONTEND   : HTML/CSS/JS Progressive Web App
-  PROTOCOL   : Firebase Commands → ESP32 → Sensor → Firebase
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. SYSTEM INITIALIZATION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  BEGIN INIT
-    CONNECT to Firebase Realtime Database
-    LISTEN to device node → iron_monitor/device01
-    LISTEN to readings node → iron_monitor/device01/readings (last 20)
-    
-    SET currentThreshold ← 0.30 PPM (WHO default)
-    SET isReadingActive  ← FALSE
-    SET csvData          ← empty array
-    SET scanTimer        ← null
-
-    INITIALIZE Chart.js waveform (line chart, empty)
-    
-    LOG "Core Systems Ready"
-  END INIT
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-2. HARDWARE CONNECTION MONITOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON Firebase device node change:
-    READ lastSeen timestamp from Firebase
-
-    IF (currentTime - lastSeen) < 15000ms THEN
-      SET status dot → GREEN (ONLINE)
-      DISPLAY "HARDWARE ONLINE"
-    ELSE
-      SET status dot → RED (OFFLINE)
-      DISPLAY "SYSTEM OFFLINE"
-    END IF
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3. BASELINE SCAN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user presses [Baseline Scan]:
-    SET isReadingActive ← FALSE
-    HIGHLIGHT baselineBtn (accent color)
-    START scanner ring animation
-    SEND command "baseline" → Firebase
-
-    LOG "Scanning Baseline..."
-
-    START timer (5000ms)
-      ON timer complete:
-        STOP scanner ring animation
-        RESET button highlight
-        LOG "Scan Complete"
-        SHOW baseline popup:
-          DISPLAY ✅ "BASELINE SCANNED"
-          DISPLAY "Reference calibration complete"
-          DISPLAY timestamp of scan
-          WAIT for user to press OK or tap overlay
-            → HIDE popup
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-4. SAMPLE SCAN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user presses [Sample Scan]:
-    SET isReadingActive ← TRUE
-    HIGHLIGHT sampleBtn (accent color)
-    START scanner ring animation
-    SEND command "start" → Firebase
-
-    LOG "Reading Sample..."
-
-    START timer (5000ms)
-      ON timer complete:
-        STOP scanner ring animation
-        RESET button highlight
-        LOG "Scan Complete"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-5. LIVE READINGS LISTENER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON Firebase readings node change:
-
-    IF isReadingActive = FALSE THEN
-      SET PPM display ← 0.00
-      RETURN (ignore data)
-    END IF
-
-    READ latest PPM value from Firebase
-    READ all values (last 20)
-
-    CALL updateGauge(latestPPM)
-    UPDATE waveform chart with all values
-
-    FOR each reading:
-      FORMAT timestamp → "YYYY-MM-DD HH:MM:SS"
-      IF reading not already in csvData THEN
-        APPEND { timestamp, ppm } to csvData
-      END IF
-    END FOR
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-6. UPDATE GAUGE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  FUNCTION updateGauge(ppm):
-
-    DISPLAY ppm on screen (2 decimal places)
-    UPDATE circular progress ring:
-      strokeDashoffset ← 848 - (848 × min(ppm / 2.0, 1))
-
-    CALCULATE percent ← (ppm / currentThreshold) × 100
-
-    IF ppm < currentThreshold THEN
-      SET color  ← GREEN (#00ff88)
-      SET status ← "SAFE"
-      SET tag    ← "STABLE"
-
-    ELSE IF ppm < currentThreshold × 1.5 THEN
-      SET color  ← ORANGE (#ffa500)
-      SET status ← "CAUTION"
-      SET tag    ← "ELEVATED"
-
-    ELSE
-      SET color  ← RED (#ff3b3b)
-      SET status ← "DANGER"
-      SET tag    ← "WARNING"
-    END IF
-
-    UPDATE --accent CSS variable ← color
-    UPDATE safety meter fill width ← percent%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-7. ABORT PROCESS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user presses [Abort Process]:
-    SET isReadingActive ← FALSE
-    CLEAR scanTimer immediately
-    STOP scanner ring animation
-    RESET all button highlights
-    SEND command "stop" → Firebase
-    LOG "Process Aborted"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-8. SYSTEM RESET
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user presses [System Reset]:
-    SHOW confirm dialog → "WARNING: Wipe all data?"
-
-    IF user confirms THEN
-      SET isReadingActive ← FALSE
-      STOP scanner ring + clear timer
-      SEND command "reset" → Firebase
-      DELETE iron_monitor/device01/readings from Firebase
-      DELETE iron_monitor/device01/baseline from Firebase
-      RESET PPM display ← 0.00
-      CLEAR csvData array
-      CLEAR waveform chart
-      LOG "Storage Wiped & Node Reset"
-    ELSE
-      DO NOTHING
-    END IF
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-9. CSV EXPORT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user presses [Download CSV]:
-
-    IF csvData is empty THEN
-      SHOW alert "No readings recorded yet"
-      RETURN
-    END IF
-
-    BUILD CSV content:
-      LINE 1 → header: "Timestamp, Iron Concentration (mg/L), Status"
-      
-      FOR each record in csvData:
-        DETERMINE status:
-          IF ppm < threshold         → "SAFE"
-          IF ppm < threshold × 1.5   → "CAUTION"
-          IF ppm >= threshold × 1.5  → "DANGER"
-        APPEND row: timestamp, ppm (4 decimal), status
-      END FOR
-
-      APPEND summary:
-        Total readings count
-        Average PPM
-        Max PPM
-        Min PPM
-        Active threshold
-
-    GENERATE filename:
-      "IronSense_YYYYMMDD_HHMM.csv"
-
-    CREATE Blob from CSV string
-    TRIGGER browser download
-    LOG "CSV Exported: N Records"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-10. THRESHOLD / PROTOCOL SELECTOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON user changes protocol dropdown:
-
-    PROTOCOL OPTIONS:
-      WHO (Global)   → 0.30 mg/L
-      BIS IS:10500   → 0.30 mg/L
-      US-EPA         → 0.30 mg/L
-      EU Directive   → 0.20 mg/L
-      India (Perm.)  → 1.00 mg/L
-
-    SET currentThreshold ← selected value
-    UPDATE threshold display label
-    RECALCULATE gauge with current PPM value
-    LOG "X Limit: Y PPM"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-11. FIREBASE DATA STRUCTURE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  iron_monitor/
-  └── device01/
-      ├── command       ← "baseline" | "start" | "stop" | "reset"
-      ├── lastSeen      ← Unix timestamp (ms) from ESP32 heartbeat
-      ├── baseline/     ← stored baseline spectral values
-      └── readings/
-          └── <id>/
-              ├── ppm        ← float (iron concentration)
-              └── timestamp  ← Unix timestamp (ms)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-12. PWA / SERVICE WORKER
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ON service worker install:
-    OPEN cache "ironsense-v1"
-    CACHE files: index.html, manifest.json,
-                 sw.js, symbiot.jpeg,
-                 icon-192.png, icon-512.png
-
-  ON fetch request:
-    IF request exists in cache THEN
-      RETURN cached version
-    ELSE
-      FETCH from network
-    END IF
-
-═══════════════════════════════════════════════════════
-   END OF PSEUDO CODE
-═══════════════════════════════════════════════════════
+END
